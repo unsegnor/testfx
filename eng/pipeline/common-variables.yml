@@ -1,0 +1,69 @@
+variables:
+  # Cannot use key:value syntax in root defined variables
+  - name: TeamName
+    value: MSTest
+  - name: _RunAsPublic
+    value: ${{ eq(variables['System.TeamProject'], 'public') }}
+  - name: _RunAsInternal
+    value: ${{ ne(variables['System.TeamProject'], 'public') }}
+  - name: _RunAsPR
+    value: ${{ eq(variables['Build.Reason'], 'PullRequest')}}
+  - name: _InternalBuildArgs
+    value: ''
+
+  # Produce test-signed build for PR and Public builds
+  - ${{ if or(eq(variables._RunAsPublic, True), eq(variables._RunAsPR, True)) }}:
+    - name: _PublishArgs
+      value: ''
+    - name: _OfficialBuildIdArgs
+      value: ''
+    - name: _SignType
+      value: test
+    - name: _SignArgs
+      value: ''
+    - name: _Sign
+      value: false
+
+  # Produce test-signed build for PR and Public builds
+  - ${{ if and(eq(variables._RunAsInternal, True), eq(variables._RunAsPR, False)) }}:
+    # TestPlatform-PATs provides: ceapex-oneloc-pat, devdiv-drop-pat, microsoft-symbol-server-pat, symweb-symbol-server-pat, testplatform-bot-github-pat
+    - group: TestPlatform-PATs
+    - group: DotNet-Blob-Feed
+    - group: DotNet-Symbol-Server-Pats
+    # needed for darc (dependency flow) publishing
+    - name: _PublishArgs
+      value: >-
+            /p:DotNetPublishUsingPipelines=true
+    - name: _OfficialBuildIdArgs
+      value: /p:OfficialBuildId=$(BUILD.BUILDNUMBER)
+    # needed for signing
+    - name: _SignType
+      value: real
+    - name: _SignArgs
+      value: /p:DotNetSignType=$(_SignType) /p:TeamName=$(_TeamName) /p:Sign=$(_Sign)
+    - name: _Sign
+      value: true
+
+  - ${{ if eq(variables._RunAsPublic, True) }}:
+    - name: _InternalRuntimeDownloadArgs
+      value: ''
+  - ${{ if eq(variables._RunAsInternal, True) }}:
+    - group: DotNet-MSRC-Storage
+    - group: AzureDevOps-Artifact-Feeds-Pats
+    - name: _InternalRuntimeDownloadArgs
+      value: >-
+        /p:DotNetRuntimeSourceFeed=https://dotnetclimsrc.blob.core.windows.net/dotnet
+        /p:DotNetRuntimeSourceFeedKey=$(dotnetclimsrc-read-sas-token-base64)
+
+  # - ${{ if and( ne(variables._RunAsPublic, True), ne(variables._RunAsPR, True) ) }}:
+  #   - name: _SignType
+  #     value: real
+  #   # TestPlatform-PATs provides: ceapex-oneloc-pat, devdiv-drop-pat, microsoft-symbol-server-pat, symweb-symbol-server-pat, testplatform-bot-github-pat
+  #   - group: TestPlatform-PATs
+  #   - name: _InternalBuildArgs
+  #     value: /p:DotNetSignType=$(_SignType)
+  #       /p:TeamName=$(_TeamName)
+  #       /p:DotNetPublishUsingPipelines=true
+  #       /p:OfficialBuildId=$(BUILD.BUILDNUMBER)
+  #   - name: PostBuildSign
+  #     value: true

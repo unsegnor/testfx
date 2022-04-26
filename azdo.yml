@@ -1,3 +1,9 @@
+parameters:
+- name: isRTM
+  displayName: "Release an RTM version?"
+  type: boolean
+  default: false
+
 trigger:
   batch: true
   branches:
@@ -10,37 +16,46 @@ pr:
     include:
       - main
       - rel/*
-  
+
 variables:
-  - template: eng/common-variables.yml
+  - template: /eng/pipeline/common-variables.yml
+  - name: EnableLoc
+    value: true
+  - name: Build.Repository.Clean
+    value: true
 
 stages:
-  - stage: build
-    displayName: Build
+
+- stage: Build
+  jobs:
+
+  # Windows
+  - template: /eng/pipeline/build.yml
+    parameters:
+      name: Windows
+      skipTests: $(SkipTests)
+      isRTM: ${{ parameters.isRTM }}
+
+- ${{ if and(eq(variables.EnableLoc, True), ne(variables._RunAsPublic, True)) }}: # ne(variables._RunAsPR, 'true'), eq(variables['Build.SourceBranch'], 'refs/heads/main')
+  - stage: OneLocBuild
+    displayName: Publish localizable content to OneLocBuild
     jobs:
-    - ${{ if and(ne(variables['System.TeamProject'], 'public'), notin(variables['Build.Reason'], 'PullRequest')) }}: # , eq(variables['Build.SourceBranch'], 'refs/heads/main')
-      - template: /eng/common/templates/job/onelocbuild.yml
-        parameters:
-          CreatePr: false
-          CeapexPat: $(ceapex-oneloc-pat)
-          GithubPat: $(testplatform-bot-github-pat)
-          AutoCompletePr: true
-          UseCheckedInLocProjectJson: true
-          GitHubOrg: microsoft
-          locProj: Localize/LocProject.json
-          
-    - job: Dummy
-      timeoutInMinutes: 90
-      pool:
-        ${{ if eq(variables._RunAsPublic, True) }}:
-          vmImage: windows-latest
-        ${{ if eq(variables._RunAsInternal, True) }}:
+    - template: /eng/common/templates/job/onelocbuild.yml
+      parameters:
+        CreatePr: false
+        AutoCompletePr: true
+        UseCheckedInLocProjectJson: true
+        GitHubOrg: microsoft
+
+- ${{ if and(ne(variables._RunAsPublic, True), ne(variables._RunAsPR, True)) }}:
+  - stage: PublishAssetRegistry
+    displayName: Publish to Build Asset Registry
+    dependsOn: Build
+    jobs:
+    - template: /eng/common/templates/job/publish-build-assets.yml
+      parameters:
+        publishUsingPipelines: true
+        pool:
           name: VSEngSS-MicroBuild2019-1ES
           demands: Cmd
-      steps:
-        - powershell: |
-            reg DELETE "HKLM\Software\Microsoft\StrongName\Verification" /f
-            reg ADD "HKLM\Software\Microsoft\StrongName\Verification\*,*" /f
-            reg DELETE "HKLM\Software\Wow6432Node\Microsoft\StrongName\Verification" /f
-            reg ADD "HKLM\Software\Wow6432Node\Microsoft\StrongName\Verification\*,*" /f
-          displayName: 'Disable strongname validation'
+

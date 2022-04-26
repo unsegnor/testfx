@@ -1,0 +1,77 @@
+parameters:
+  name: ''
+  isRTM: false
+  targetArchitecture: null
+  timeoutInMinutes: 120
+  enableMicrobuild: true
+  enablePublishBuildArtifacts: true
+  enablePublishTestResults: true
+  enablePublishBuildAssets: true
+  enablePublishUsingPipelines: true
+
+jobs:
+  - job: ${{ parameters.name }}
+    displayName: ${{ parameters.name }}
+    timeoutInMinutes: ${{ parameters.timeoutInMinutes }}
+    pool:
+      ${{ if eq(variables._RunAsPublic, True) }}:
+        vmImage: windows-latest
+      ${{ if eq(variables._RunAsInternal, True) }}:
+        name: VSEngSS-MicroBuild2019-1ES
+        demands: Cmd
+    strategy:
+      matrix:
+        ${{ if or(eq(variables._RunAsPublic, True), eq(variables._RunAsPR, True)) }}:
+          Debug:
+            _BuildConfig: Debug
+            _SignType: test
+            ${{ if eq(variables._RunAsPublic, True) }}:
+              _Coverage: false
+        Release:
+          _BuildConfig: Release
+          _Coverage: false
+    workspace:
+      clean: all
+
+    steps:
+    - checkout: self
+      clean: true
+
+    - ${{ if ne(variables._RunAsPublic, True) }}:
+      - task: PowerShell@2
+        displayName: Setup Private Feeds Credentials
+        condition: eq(variables['Agent.OS'], 'Windows_NT')
+        inputs:
+          filePath: $(Build.SourcesDirectory)/eng/common/SetupNugetSources.ps1
+          arguments: -ConfigFile $(Build.SourcesDirectory)/NuGet.config -Password $Env:Token
+        env:
+          Token: $(dn-bot-dnceng-artifact-feeds-rw)
+
+      - task: MicroBuildSigningPlugin@4
+        displayName: Install MicroBuild plugin for Signing
+        inputs:
+          signType: $(_SignType)
+          zipSources: false
+          feedSource: 'https://devdiv.pkgs.visualstudio.com/DefaultCollection/_packaging/MicroBuildToolset/nuget/v3/index.json'
+        continueOnError: false
+        condition: and(succeeded(), in(variables._SignType, 'real', 'test'))
+
+    # NuGet's http cache lasts 30 minutes. If we're on a static machine, this may interfere with
+    # auto-update PRs by preventing the CI build from fetching the new version. Delete the cache.
+    - powershell: Remove-Item -Recurse -ErrorAction Ignore "$env:LocalAppData\NuGet\v3-cache"
+      displayName: Clear NuGet http cache (if exists)
+
+    - task: PowerShell@2
+      displayName: Set version variables
+      inputs:
+        filePath: $(Build.SourcesDirectory)/eng/set-version.ps1 
+        arguments: -IsRtmBuild ${{ parameters.isRTM }}
+
+    - powershell: >-
+        Write-Host $(TestAdapterNugetVersion)
+        Write-Host $(TestFrameworkNugetVersion)
+        Write-Host $(NugetVersionSuffix)
+        Write-Host $(BuildVersionPrefix)
+        Write-Host $(BuildVersionSuffix)
+        Write-Host $(PackageVersion)
+      displayName: Output variables
